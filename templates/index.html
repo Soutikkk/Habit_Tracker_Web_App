@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HabitTrack — Minimal & Modern Habit Tracker</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#eef2ff',
+                            100: '#e0e7ff',
+                            500: '#6366f1',
+                            600: '#4f46e5',
+                            700: '#4338ca',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Lucide Icons & Canvas Confetti CDN -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen antialiased flex flex-col justify-between">
+
+    <!-- Top Navigation -->
+    <header class="border-b border-slate-200/80 bg-white/80 sticky top-0 z-30 backdrop-blur-md">
+        <div class="max-w-5xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center text-white shadow-md shadow-indigo-200">
+                    <i class="fa-solid fa-fire text-lg"></i>
+                </div>
+                <div>
+                    <h1 class="text-xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
+                        Habit<span class="text-indigo-600">Track</span>
+                    </h1>
+                    <p class="text-xs text-slate-500 font-medium">{{ today_formatted }}</p>
+                </div>
+            </div>
+
+            <button onclick="openAddModal()" 
+                    class="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold shadow-sm shadow-indigo-200 transition active:scale-95 cursor-pointer">
+                <i class="fa-solid fa-plus text-xs"></i>
+                <span>Add Habit</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="max-w-5xl mx-auto px-4 sm:px-6 py-8 flex-1 w-full space-y-8">
+        
+        <!-- Quick Stats Overview -->
+        <section class="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <!-- Total Habits -->
+            <div class="bg-white p-5 rounded-2xl border border-slate-200/70 shadow-sm flex flex-col justify-between">
+                <div class="flex items-center justify-between text-slate-500 text-xs font-semibold uppercase tracking-wider">
+                    <span>Total Habits</span>
+                    <i class="fa-regular fa-calendar-check text-slate-400"></i>
+                </div>
+                <div class="mt-3 flex items-baseline gap-2">
+                    <span id="stat-total" class="text-2xl sm:text-3xl font-bold text-slate-900">{{ stats.total_habits }}</span>
+                    <span class="text-xs text-slate-400">active</span>
+                </div>
+            </div>
+
+            <!-- Today's Progress -->
+            <div class="bg-white p-5 rounded-2xl border border-slate-200/70 shadow-sm flex flex-col justify-between">
+                <div class="flex items-center justify-between text-slate-500 text-xs font-semibold uppercase tracking-wider">
+                    <span>Today's Done</span>
+                    <i class="fa-solid fa-chart-pie text-indigo-400"></i>
+                </div>
+                <div class="mt-3">
+                    <div class="flex items-baseline gap-1.5">
+                        <span id="stat-completed" class="text-2xl sm:text-3xl font-bold text-indigo-600">{{ stats.completed_today }}</span>
+                        <span class="text-slate-400 text-sm font-medium">/ <span id="stat-total-sub">{{ stats.total_habits }}</span></span>
+                    </div>
+                    <!-- Mini progress bar -->
+                    <div class="w-full bg-slate-100 rounded-full h-1.5 mt-2 overflow-hidden">
+                        <div id="stat-progress-bar" class="bg-indigo-600 h-1.5 rounded-full transition-all duration-500" style="width: {{ stats.completion_rate_today }}%;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Best Active Streak -->
+            <div class="bg-white p-5 rounded-2xl border border-slate-200/70 shadow-sm flex flex-col justify-between">
+                <div class="flex items-center justify-between text-slate-500 text-xs font-semibold uppercase tracking-wider">
+                    <span>Best Streak</span>
+                    <i class="fa-solid fa-bolt text-amber-500"></i>
+                </div>
+                <div class="mt-3 flex items-baseline gap-2">
+                    <span id="stat-streak" class="text-2xl sm:text-3xl font-bold text-slate-900">{{ stats.best_streak }}</span>
+                    <span class="text-xs text-amber-600 font-medium">days 🔥</span>
+                </div>
+            </div>
+
+            <!-- Total Check-ins -->
+            <div class="bg-white p-5 rounded-2xl border border-slate-200/70 shadow-sm flex flex-col justify-between">
+                <div class="flex items-center justify-between text-slate-500 text-xs font-semibold uppercase tracking-wider">
+                    <span>Total Logs</span>
+                    <i class="fa-solid fa-medal text-emerald-500"></i>
+                </div>
+                <div class="mt-3 flex items-baseline gap-2">
+                    <span id="stat-logs" class="text-2xl sm:text-3xl font-bold text-slate-900">{{ stats.total_completions }}</span>
+                    <span class="text-xs text-emerald-600 font-medium">all-time</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Habits List Section -->
+        <section class="space-y-4">
+            <!-- Filter Bar & Section Header -->
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                    <h2 class="text-lg font-bold text-slate-900">Today's Habits</h2>
+                    <p class="text-xs text-slate-500">Track and log your daily progress</p>
+                </div>
+
+                <!-- Filter Pills -->
+                <div class="inline-flex p-1 bg-slate-200/70 rounded-xl text-xs font-medium text-slate-600">
+                    <button onclick="filterHabits('all')" id="filter-all" class="px-3 py-1.5 rounded-lg bg-white shadow-sm text-slate-900 font-semibold transition">All ({{ habits|length }})</button>
+                    <button onclick="filterHabits('pending')" id="filter-pending" class="px-3 py-1.5 rounded-lg hover:text-slate-900 transition">Pending</button>
+                    <button onclick="filterHabits('completed')" id="filter-completed" class="px-3 py-1.5 rounded-lg hover:text-slate-900 transition">Completed</button>
+                </div>
+            </div>
+
+            {% if habits|length == 0 %}
+                <!-- Empty State -->
+                <div class="bg-white rounded-2xl border border-dashed border-slate-300 p-12 text-center space-y-4">
+                    <div class="w-16 h-16 rounded-full bg-indigo-50 text-indigo-500 flex items-center justify-center mx-auto text-2xl">
+                        <i class="fa-solid fa-seedling"></i>
+                    </div>
+                    <div>
+                        <h3 class="text-base font-semibold text-slate-800">No habits tracked yet</h3>
+                        <p class="text-sm text-slate-500 max-w-sm mx-auto mt-1">Start small! Add your first daily habit and build momentum day by day.</p>
+                    </div>
+                    <button onclick="openAddModal()" class="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold shadow transition cursor-pointer">
+                        <i class="fa-solid fa-plus text-xs"></i>
+                        <span>Create your first habit</span>
+                    </button>
+                </div>
+            {% else %}
+                <!-- Habits Card Grid / List -->
+                <div class="space-y-3" id="habits-container">
+                    {% for habit in habits %}
+                    <div class="habit-item bg-white rounded-2xl border border-slate-200/70 p-4 sm:p-5 shadow-sm transition hover:shadow-md hover:border-slate-300"
+                         data-id="{{ habit.id }}"
+                         data-completed="{{ 'true' if habit.is_completed_today else 'false' }}">
+                        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                            
+                            <!-- Left: Checkbox + Name + Badges -->
+                            <div class="flex items-start sm:items-center gap-3.5">
+                                <!-- Complete Checkbox (Today) -->
+                                <button type="button"
+                                        onclick="toggleHabit({{ habit.id }}, '{{ today_str }}', this)"
+                                        class="habit-toggle-btn mt-0.5 sm:mt-0 flex-shrink-0 w-8 h-8 rounded-xl border-2 flex items-center justify-center transition-all cursor-pointer {{ 'bg-indigo-600 border-indigo-600 text-white shadow-sm shadow-indigo-200' if habit.is_completed_today else 'border-slate-300 text-transparent hover:border-indigo-400 bg-white' }}"
+                                        title="Click to mark complete for today">
+                                    <i class="fa-solid fa-check text-sm {{ '' if habit.is_completed_today else 'opacity-0' }}"></i>
+                                </button>
+
+                                <div class="space-y-1">
+                                    <div class="flex items-center gap-2 flex-wrap">
+                                        <span class="habit-title font-bold text-slate-900 text-base sm:text-lg {{ 'line-through text-slate-400' if habit.is_completed_today else '' }}">
+                                            {{ habit.name }}
+                                        </span>
+                                        
+                                        <!-- Category Tag -->
+                                        <span class="px-2.5 py-0.5 text-xs font-semibold rounded-full 
+                                            {% if habit.category == 'Health' %} bg-emerald-50 text-emerald-700 border border-emerald-200
+                                            {% elif habit.category == 'Fitness' %} bg-rose-50 text-rose-700 border border-rose-200
+                                            {% elif habit.category == 'Productivity' %} bg-blue-50 text-blue-700 border border-blue-200
+                                            {% elif habit.category == 'Learning' %} bg-purple-50 text-purple-700 border border-purple-200
+                                            {% elif habit.category == 'Mindset' %} bg-amber-50 text-amber-700 border border-amber-200
+                                            {% else %} bg-slate-100 text-slate-700 border border-slate-200 {% endif %}">
+                                            {{ habit.category }}
+                                        </span>
+
+                                        <span class="text-xs text-slate-400 font-medium">
+                                            {{ habit.frequency }}d/wk
+                                        </span>
+                                    </div>
+
+                                    <!-- Streak counter details -->
+                                    <div class="flex items-center gap-3 text-xs text-slate-500">
+                                        <span class="inline-flex items-center gap-1 font-semibold {{ 'text-amber-600' if habit.current_streak > 0 else 'text-slate-400' }}">
+                                            <i class="fa-solid fa-fire {{ 'streak-active text-amber-500' if habit.current_streak > 0 else 'text-slate-300' }}"></i>
+                                            <span class="current-streak-val">{{ habit.current_streak }}</span> day streak
+                                        </span>
+                                        <span class="text-slate-300">•</span>
+                                        <span>Best: <strong>{{ habit.longest_streak }}d</strong></span>
+                                        <span class="text-slate-300">•</span>
+                                        <span>Total: <strong>{{ habit.total_completions }} logs</strong></span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Right: 7-Day History Matrix & Delete Action -->
+                            <div class="flex items-center justify-between sm:justify-end gap-4 border-t sm:border-t-0 pt-3 sm:pt-0 border-slate-100">
+                                <!-- 7-Day Mini Calendar Dots -->
+                                <div class="flex items-center gap-1.5">
+                                    {% for day in habit.history_7d %}
+                                    <button type="button"
+                                            onclick="toggleHabit({{ habit.id }}, '{{ day.date_str }}', this, true)"
+                                            class="w-7 h-9 rounded-lg flex flex-col items-center justify-center text-[10px] font-semibold transition cursor-pointer 
+                                                {% if day.is_today %} ring-2 ring-indigo-500/40 {% endif %}
+                                                {% if day.completed %} bg-indigo-600 text-white shadow-xs
+                                                {% else %} bg-slate-100 text-slate-400 hover:bg-slate-200 {% endif %}"
+                                            title="{{ day.day_name }}, {{ day.date_str }}: {{ 'Completed' if day.completed else 'Incomplete' }} (Click to toggle)">
+                                        <span class="text-[9px] uppercase tracking-tighter opacity-80">{{ day.day_name[0] }}</span>
+                                        <span class="text-[10px] leading-tight">{{ day.day_num }}</span>
+                                    </button>
+                                    {% endfor %}
+                                </div>
+
+                                <!-- Delete Habit Button -->
+                                <button type="button" 
+                                        onclick="confirmDelete({{ habit.id }}, '{{ habit.name|replace("'", "\\'") }}')" 
+                                        class="text-slate-400 hover:text-rose-600 p-2 rounded-xl hover:bg-rose-50 transition cursor-pointer"
+                                        title="Delete habit">
+                                    <i class="fa-regular fa-trash-can text-sm"></i>
+                                </button>
+                            </div>
+
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        </section>
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="border-t border-slate-200/80 bg-white/50 py-4 text-center text-xs text-slate-400">
+        <div class="max-w-5xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
+            <span>HabitTrack &copy; {{ today_formatted.split(',')[-1].strip() }} — Built with Python & SQLite</span>
+            <span>Consistent habits create consistent results 🚀</span>
+        </div>
+    </footer>
+
+    <!-- Add Habit Modal -->
+    <div id="add-modal" class="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm hidden flex items-center justify-center p-4">
+        <div class="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-100 animate-modal relative">
+            <button onclick="closeAddModal()" class="absolute top-5 right-5 text-slate-400 hover:text-slate-600 p-1">
+                <i class="fa-solid fa-xmark text-lg"></i>
+            </button>
+
+            <div class="flex items-center gap-3 mb-5">
+                <div class="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                    <i class="fa-solid fa-plus text-base"></i>
+                </div>
+                <div>
+                    <h3 class="text-lg font-bold text-slate-900">Add New Habit</h3>
+                    <p class="text-xs text-slate-500">Commit to a new positive daily routine</p>
+                </div>
+            </div>
+
+            <form action="{{ url_for('add_habit') }}" method="POST" class="space-y-4">
+                <div>
+                    <label class="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">Habit Name <span class="text-rose-500">*</span></label>
+                    <input type="text" name="name" required placeholder="e.g. Read 20 pages of a book" 
+                           class="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm text-slate-900 placeholder-slate-400">
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">Category</label>
+                        <select name="category" class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm bg-white text-slate-800">
+                            <option value="Health">🍏 Health</option>
+                            <option value="Fitness">🏃 Fitness</option>
+                            <option value="Productivity">⚡ Productivity</option>
+                            <option value="Learning">📚 Learning</option>
+                            <option value="Mindset">🧘 Mindset</option>
+                            <option value="General" selected>⭐ General</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">Target Frequency</label>
+                        <select name="frequency" class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm bg-white text-slate-800">
+                            <option value="7" selected>Everyday (7d/wk)</option>
+                            <option value="6">6 days / week</option>
+                            <option value="5">5 days / week</option>
+                            <option value="4">4 days / week</option>
+                            <option value="3">3 days / week</option>
+                            <option value="2">2 days / week</option>
+                            <option value="1">1 day / week</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+                    <button type="button" onclick="closeAddModal()" class="px-4 py-2 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-100 transition cursor-pointer">
+                        Cancel
+                    </button>
+                    <button type="submit" class="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold shadow-sm shadow-indigo-200 transition active:scale-95 cursor-pointer">
+                        Create Habit
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div id="delete-modal" class="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm hidden flex items-center justify-center p-4">
+        <div class="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-slate-100 animate-modal text-center space-y-4">
+            <div class="w-12 h-12 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto text-xl">
+                <i class="fa-solid fa-trash-can"></i>
+            </div>
+            <div>
+                <h3 class="text-base font-bold text-slate-900">Delete Habit?</h3>
+                <p class="text-xs text-slate-500 mt-1">Are you sure you want to delete <span id="delete-habit-name" class="font-semibold text-slate-800"></span>? All logged completion history will be removed.</p>
+            </div>
+            <form id="delete-form" method="POST" class="flex items-center justify-center gap-3 pt-2">
+                <button type="button" onclick="closeDeleteModal()" class="flex-1 px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 transition cursor-pointer">
+                    Cancel
+                </button>
+                <button type="submit" class="flex-1 px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold shadow-sm transition active:scale-95 cursor-pointer">
+                    Delete
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- JavaScript Interactive Logic -->
+    <script>
+        const todayStr = "{{ today_str }}";
+
+        function openAddModal() {
+            document.getElementById('add-modal').classList.remove('hidden');
+        }
+
+        function closeAddModal() {
+            document.getElementById('add-modal').classList.add('hidden');
+        }
+
+        function confirmDelete(id, name) {
+            document.getElementById('delete-habit-name').textContent = `"${name}"`;
+            document.getElementById('delete-form').action = `/habits/${id}/delete`;
+            document.getElementById('delete-modal').classList.remove('hidden');
+        }
+
+        function closeDeleteModal() {
+            document.getElementById('delete-modal').classList.add('hidden');
+        }
+
+        // Filter habits
+        function filterHabits(type) {
+            const items = document.querySelectorAll('.habit-item');
+            const buttons = {
+                all: document.getElementById('filter-all'),
+                pending: document.getElementById('filter-pending'),
+                completed: document.getElementById('filter-completed'),
+            };
+
+            // Reset buttons
+            Object.values(buttons).forEach(btn => {
+                btn.className = 'px-3 py-1.5 rounded-lg hover:text-slate-900 transition text-slate-600 font-medium';
+            });
+
+            buttons[type].className = 'px-3 py-1.5 rounded-lg bg-white shadow-sm text-slate-900 font-semibold transition';
+
+            items.forEach(item => {
+                const isCompleted = item.getAttribute('data-completed') === 'true';
+                if (type === 'all') {
+                    item.style.display = 'block';
+                } else if (type === 'completed') {
+                    item.style.display = isCompleted ? 'block' : 'none';
+                } else if (type === 'pending') {
+                    item.style.display = !isCompleted ? 'block' : 'none';
+                }
+            });
+        }
+
+        // Async toggle habit
+        async function toggleHabit(habitId, dateStr, element, isHistoryPill = false) {
+            try {
+                const response = await fetch(`/habits/${habitId}/toggle`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    },
+                    body: JSON.stringify({ date: dateStr })
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    // Update streak counter in DOM
+                    const habitCard = document.querySelector(`.habit-item[data-id="${habitId}"]`);
+                    if (habitCard) {
+                        const streakEl = habitCard.querySelector('.current-streak-val');
+                        if (streakEl) streakEl.textContent = data.current_streak;
+                    }
+
+                    // If toggling today
+                    if (dateStr === todayStr) {
+                        const isDone = data.completed;
+                        if (habitCard) {
+                            habitCard.setAttribute('data-completed', isDone ? 'true' : 'false');
+                            const titleEl = habitCard.querySelector('.habit-title');
+                            const toggleBtn = habitCard.querySelector('.habit-toggle-btn');
+                            const checkIcon = toggleBtn.querySelector('i');
+
+                            if (isDone) {
+                                titleEl.classList.add('line-through', 'text-slate-400');
+                                toggleBtn.className = 'habit-toggle-btn mt-0.5 sm:mt-0 flex-shrink-0 w-8 h-8 rounded-xl border-2 flex items-center justify-center transition-all cursor-pointer bg-indigo-600 border-indigo-600 text-white shadow-sm shadow-indigo-200';
+                                checkIcon.classList.remove('opacity-0');
+                                // Confetti on completion
+                                confetti({
+                                    particleCount: 40,
+                                    spread: 60,
+                                    origin: { y: 0.8 }
+                                });
+                            } else {
+                                titleEl.classList.remove('line-through', 'text-slate-400');
+                                toggleBtn.className = 'habit-toggle-btn mt-0.5 sm:mt-0 flex-shrink-0 w-8 h-8 rounded-xl border-2 flex items-center justify-center transition-all cursor-pointer border-slate-300 text-transparent hover:border-indigo-400 bg-white';
+                                checkIcon.classList.add('opacity-0');
+                            }
+                        }
+                    }
+
+                    // If clicking the 7-day pill
+                    if (isHistoryPill && element) {
+                        if (data.completed) {
+                            element.classList.remove('bg-slate-100', 'text-slate-400', 'hover:bg-slate-200');
+                            element.classList.add('bg-indigo-600', 'text-white', 'shadow-xs');
+                        } else {
+                            element.classList.add('bg-slate-100', 'text-slate-400', 'hover:bg-slate-200');
+                            element.classList.remove('bg-indigo-600', 'text-white', 'shadow-xs');
+                        }
+                    }
+
+                    // Update header stats live
+                    recalculateStatsLive();
+                }
+            } catch (err) {
+                console.error('Toggle error:', err);
+                // Fallback: reload page
+                window.location.reload();
+            }
+        }
+
+        function recalculateStatsLive() {
+            const allHabits = document.querySelectorAll('.habit-item');
+            const total = allHabits.length;
+            let completed = 0;
+            let maxStreak = 0;
+
+            allHabits.forEach(h => {
+                if (h.getAttribute('data-completed') === 'true') completed++;
+                const streakNum = parseInt(h.querySelector('.current-streak-val')?.textContent || '0', 10);
+                if (streakNum > maxStreak) maxStreak = streakNum;
+            });
+
+            const statCompleted = document.getElementById('stat-completed');
+            const statProgressBar = document.getElementById('stat-progress-bar');
+            const statStreak = document.getElementById('stat-streak');
+
+            if (statCompleted) statCompleted.textContent = completed;
+            if (statStreak) statStreak.textContent = maxStreak;
+
+            const percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
+            if (statProgressBar) statProgressBar.style.width = percentage + '%';
+
+            // If all completed celebration
+            if (total > 0 && completed === total) {
+                confetti({
+                    particleCount: 100,
+                    spread: 80,
+                    origin: { y: 0.6 }
+                });
+            }
+        }
+
+        // Close modals with Escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeAddModal();
+                closeDeleteModal();
+            }
+        });
+    </script>
+</body>
+</html>
