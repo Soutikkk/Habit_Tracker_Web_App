@@ -1,31 +1,64 @@
+
 import os
 import sqlite3
+from collections import defaultdict
 from datetime import date, datetime, timedelta
-from flask import Flask, render_template, request, redirect, url_for, jsonify, g
+from pathlib import Path
+
+from flask import (
+    Flask,
+    g,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    url_for,
+)
+
+
+# ============================================================
+# APPLICATION CONFIGURATION
+# ============================================================
+
+BASE_DIR = Path(__file__).resolve().parent
 
 app = Flask(__name__)
-app.config['DATABASE'] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'habits.db')
-app.config['SECRET_KEY'] = 'dev-secret-key-habit-tracker-2026'
+
+app.config.update(
+    DATABASE=str(BASE_DIR / "habits.db"),
+    SECRET_KEY=os.environ.get("SECRET_KEY", os.urandom(32).hex()),
+)
+
+
+# ============================================================
+# DATABASE MANAGEMENT
+# ============================================================
 
 def get_db():
-    if 'db' not in g:
-        g.db = sqlite3.connect(
-            app.config['DATABASE'],
-            detect_types=sqlite3.PARSE_DECLTYPES
-        )
-        g.db.row_factory = sqlite3.Row
-        g.db.execute("PRAGMA foreign_keys = ON;")
+    """Return a database connection for the current request."""
+    if "db" not in g:
+        connection = sqlite3.connect(app.config["DATABASE"])
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        g.db = connection
+
     return g.db
 
+
 @app.teardown_appcontext
-def close_db(error):
-    db = g.pop('db', None)
-    if db is not None:
-        db.close()
+def close_db(error=None):
+    """Close the database connection after each request."""
+    connection = g.pop("db", None)
+
+    if connection is not None:
+        connection.close()
+
 
 def init_db():
+    """Create database tables if they do not exist."""
     db = get_db()
-    db.executescript('''
+
+    db.executescript("""
         CREATE TABLE IF NOT EXISTS habits (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -39,225 +72,447 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             habit_id INTEGER NOT NULL,
             completed_date TEXT NOT NULL,
-            FOREIGN KEY (habit_id) REFERENCES habits (id) ON DELETE CASCADE,
+            FOREIGN KEY (habit_id)
+                REFERENCES habits(id)
+                ON DELETE CASCADE,
             UNIQUE(habit_id, completed_date)
         );
-    ''')
+
+        CREATE INDEX IF NOT EXISTS idx_habit_logs_habit_id
+        ON habit_logs(habit_id);
+    """)
+
     db.commit()
 
-def calculate_streaks(completed_dates_set, today_str, yesterday_str):
-    """
-    Calculate current streak and longest streak from a set of 'YYYY-MM-DD' strings.
-    """
-    if not completed_dates_set:
-        return 0, 0
 
-    sorted_dates = sorted([datetime.strptime(d, '%Y-%m-%d').date() for d in completed_dates_set])
-    
-    # Calculate current streak
-    today_date = datetime.strptime(today_str, '%Y-%m-%d').date()
-    yesterday_date = datetime.strptime(yesterday_str, '%Y-%m-%d').date()
-    
-    current_streak = 0
-    check_date = None
-    
-    if today_str in completed_dates_set:
-        check_date = today_date
-    elif yesterday_str in completed_dates_set:
-        check_date = yesterday_date
-        
-    if check_date:
-        while check_date.strftime('%Y-%m-%d') in completed_dates_set:
-            current_streak += 1
-            check_date -= timedelta(days=1)
+# ============================================================
+# DATE UTILITIES
+# ============================================================
 
-    # Calculate longest streak
-    longest_streak = 0
-    if sorted_dates:
-        temp_streak = 1
-        longest_streak = 1
-        for i in range(1, len(sorted_dates)):
-            diff = (sorted_dates[i] - sorted_dates[i - 1]).days
-            if diff == 1:
-                temp_streak += 1
-                longest_streak = max(longest_streak, temp_streak)
-            elif diff > 1:
-                temp_streak = 1
-    
-    return current_streak, max(longest_streak, current_streak)
+def format_date(value):
+    """Convert a date object into YYYY-MM-DD format."""
+    return value.isoformat()
+
 
 def get_recent_days(num_days=7):
-    """Returns a list of dicts for the last N days with format info."""
+    """Generate information for the last N days."""
     today = date.today()
-    days = []
-    for i in range(num_days - 1, -1, -1):
-        day_date = today - timedelta(days=i)
-        days.append({
-            'date_str': day_date.strftime('%Y-%m-%d'),
-            'day_name': day_date.strftime('%a'),      # Mon, Tue, etc.
-            'day_num': day_date.strftime('%d'),       # 01, 02, etc.
-            'is_today': day_date == today
-        })
-    return days
 
-@app.route('/')
-def index():
-    init_db()
-    db = get_db()
-    today_str = date.today().strftime('%Y-%m-%d')
-    yesterday_str = (date.today() - timedelta(days=1)).strftime('%Y-%m-%d')
-    
-    recent_days = get_recent_days(7)
-    
-    # Fetch all active habits
-    habits_rows = db.execute(
-        "SELECT * FROM habits WHERE archived = 0 ORDER BY id DESC"
-    ).fetchall()
-    
-    habits = []
-    completed_today_count = 0
-    total_completions_all_time = 0
-    
-    for h in habits_rows:
-        h_id = h['id']
-        logs = db.execute(
-            "SELECT completed_date FROM habit_logs WHERE habit_id = ?",
-            (h_id,)
-        ).fetchall()
-        
-        completed_dates_set = {row['completed_date'] for row in logs}
-        is_completed_today = today_str in completed_dates_set
-        if is_completed_today:
-            completed_today_count += 1
-            
-        total_completions_all_time += len(completed_dates_set)
-        current_streak, longest_streak = calculate_streaks(completed_dates_set, today_str, yesterday_str)
-        
-        # Build 7-day history matrix
-        history_7d = []
-        for day in recent_days:
-            d_str = day['date_str']
-            history_7d.append({
-                'date_str': d_str,
-                'day_name': day['day_name'],
-                'day_num': day['day_num'],
-                'is_today': day['is_today'],
-                'completed': d_str in completed_dates_set
-            })
-            
-        habits.append({
-            'id': h['id'],
-            'name': h['name'],
-            'category': h['category'] or 'General',
-            'frequency': h['frequency'] or 7,
-            'created_at': h['created_at'],
-            'is_completed_today': is_completed_today,
-            'current_streak': current_streak,
-            'longest_streak': longest_streak,
-            'total_completions': len(completed_dates_set),
-            'history_7d': history_7d
-        })
-    
-    total_habits = len(habits)
-    completion_rate_today = round((completed_today_count / total_habits * 100)) if total_habits > 0 else 0
-    best_overall_streak = max([h['current_streak'] for h in habits], default=0)
-    
-    return render_template(
-        'index.html',
-        habits=habits,
-        today_formatted=date.today().strftime('%A, %B %d, %Y'),
-        today_str=today_str,
-        recent_days=recent_days,
-        stats={
-            'total_habits': total_habits,
-            'completed_today': completed_today_count,
-            'completion_rate_today': completion_rate_today,
-            'best_streak': best_overall_streak,
-            'total_completions': total_completions_all_time
+    return [
+        {
+            "date_str": format_date(day),
+            "day_name": day.strftime("%a"),
+            "day_num": day.strftime("%d"),
+            "is_today": day == today,
         }
+        for day in (
+            today - timedelta(days=offset)
+            for offset in range(num_days - 1, -1, -1)
+        )
+    ]
+
+
+def validate_date(date_string):
+    """Validate a completion date and reject future dates."""
+    try:
+        parsed_date = date.fromisoformat(date_string)
+
+        if parsed_date.isoformat() != date_string:
+            return False
+
+        return parsed_date <= date.today()
+
+    except (ValueError, TypeError):
+        return False
+
+
+# ============================================================
+# STREAK CALCULATIONS
+# ============================================================
+
+def calculate_streaks(completed_dates, today_str=None, yesterday_str=None):
+    """
+    Calculate current and longest consecutive-day streaks.
+
+    Current streak remains active when the latest completion
+    is today or yesterday.
+    """
+    if not completed_dates:
+        return 0, 0
+
+    today = (
+        date.fromisoformat(today_str)
+        if today_str
+        else date.today()
     )
 
-@app.route('/habits/add', methods=['POST'])
-def add_habit():
-    name = request.form.get('name', '').strip()
-    category = request.form.get('category', 'General').strip() or 'General'
-    frequency = request.form.get('frequency', 7, type=int)
-    
-    if name:
-        db = get_db()
-        db.execute(
-            "INSERT INTO habits (name, category, frequency) VALUES (?, ?, ?)",
-            (name, category, max(1, min(7, frequency)))
-        )
-        db.commit()
-        
-    if request.headers.get('X-Requested-With') == 'XMLHttpRequest' or request.is_json:
-        return jsonify({'success': True, 'message': 'Habit created successfully'})
-    return redirect(url_for('index'))
+    yesterday = (
+        date.fromisoformat(yesterday_str)
+        if yesterday_str
+        else today - timedelta(days=1)
+    )
 
-@app.route('/habits/<int:habit_id>/toggle', methods=['POST'])
-def toggle_habit(habit_id):
-    db = get_db()
-    
-    # Get date from JSON, form, or default to today
-    data = request.get_json(silent=True) or request.form
-    target_date = data.get('date') or date.today().strftime('%Y-%m-%d')
-    
-    # Check if already completed
-    existing = db.execute(
-        "SELECT id FROM habit_logs WHERE habit_id = ? AND completed_date = ?",
-        (habit_id, target_date)
-    ).fetchone()
-    
-    completed = False
-    if existing:
-        db.execute("DELETE FROM habit_logs WHERE id = ?", (existing['id'],))
-        completed = False
+    dates = {
+        date.fromisoformat(value)
+        for value in completed_dates
+    }
+
+    # Current streak
+    current_streak = 0
+
+    if today in dates:
+        cursor = today
+    elif yesterday in dates:
+        cursor = yesterday
     else:
-        db.execute(
-            "INSERT INTO habit_logs (habit_id, completed_date) VALUES (?, ?)",
-            (habit_id, target_date)
+        cursor = None
+
+    while cursor is not None and cursor in dates:
+        current_streak += 1
+        cursor -= timedelta(days=1)
+
+    # Longest streak
+    longest_streak = 0
+    consecutive_days = 0
+    previous_day = None
+
+    for day in sorted(dates):
+        if previous_day and (day - previous_day).days == 1:
+            consecutive_days += 1
+        else:
+            consecutive_days = 1
+
+        longest_streak = max(
+            longest_streak,
+            consecutive_days
         )
-        completed = True
-        
-    db.commit()
-    
-    # Recalculate streak for this habit
-    today_str = date.today().strftime('%Y-%m-%d')
-    yesterday_str = (date.today() - timedelta(days=1)).strftime('%Y-%m-%d')
-    logs = db.execute(
-        "SELECT completed_date FROM habit_logs WHERE habit_id = ?",
+
+        previous_day = day
+
+    return current_streak, longest_streak
+
+
+# ============================================================
+# DATABASE QUERY HELPERS
+# ============================================================
+
+def get_active_habits():
+    """Fetch all non-archived habits."""
+    return get_db().execute("""
+        SELECT *
+        FROM habits
+        WHERE archived = 0
+        ORDER BY id DESC
+    """).fetchall()
+
+
+def get_habit(habit_id):
+    """Fetch one habit by ID."""
+    return get_db().execute(
+        "SELECT * FROM habits WHERE id = ?",
         (habit_id,)
-    ).fetchall()
-    completed_dates_set = {row['completed_date'] for row in logs}
-    current_streak, longest_streak = calculate_streaks(completed_dates_set, today_str, yesterday_str)
-    
-    if request.headers.get('X-Requested-With') == 'XMLHttpRequest' or request.is_json:
+    ).fetchone()
+
+
+def get_all_habit_logs():
+    """Fetch completion dates grouped by habit ID."""
+    rows = get_db().execute("""
+        SELECT habit_id, completed_date
+        FROM habit_logs
+    """).fetchall()
+
+    logs = defaultdict(set)
+
+    for row in rows:
+        logs[row["habit_id"]].add(row["completed_date"])
+
+    return logs
+
+
+def get_habit_dates(habit_id):
+    """Fetch completion dates for a specific habit."""
+    rows = get_db().execute("""
+        SELECT completed_date
+        FROM habit_logs
+        WHERE habit_id = ?
+    """, (habit_id,)).fetchall()
+
+    return {row["completed_date"] for row in rows}
+
+
+# ============================================================
+# HABIT DATA PROCESSING
+# ============================================================
+
+def build_habit_data(habit, completed_dates, recent_days):
+    """Convert a database habit into dashboard-ready data."""
+    today_str = format_date(date.today())
+
+    current_streak, longest_streak = calculate_streaks(
+        completed_dates
+    )
+
+    history = [
+        {
+            **day,
+            "completed": day["date_str"] in completed_dates,
+        }
+        for day in recent_days
+    ]
+
+    return {
+        "id": habit["id"],
+        "name": habit["name"],
+        "category": habit["category"] or "General",
+        "frequency": habit["frequency"] or 7,
+        "created_at": habit["created_at"],
+        "is_completed_today": today_str in completed_dates,
+        "current_streak": current_streak,
+        "longest_streak": longest_streak,
+        "total_completions": len(completed_dates),
+        "history_7d": history,
+    }
+
+
+def calculate_dashboard_stats(habits):
+    """Calculate summary statistics for active habits."""
+    total_habits = len(habits)
+
+    completed_today = sum(
+        habit["is_completed_today"]
+        for habit in habits
+    )
+
+    completion_rate = (
+        round(completed_today / total_habits * 100)
+        if total_habits
+        else 0
+    )
+
+    return {
+        "total_habits": total_habits,
+        "completed_today": completed_today,
+        "completion_rate_today": completion_rate,
+        "best_streak": max(
+            (habit["current_streak"] for habit in habits),
+            default=0
+        ),
+        "total_completions": sum(
+            habit["total_completions"]
+            for habit in habits
+        ),
+    }
+
+
+# ============================================================
+# RESPONSE HELPERS
+# ============================================================
+
+def is_ajax_request():
+    """Check whether the client expects a JSON response."""
+    return (
+        request.headers.get("X-Requested-With") == "XMLHttpRequest"
+        or request.is_json
+    )
+
+
+def success_response(message, **extra):
+    """Return a success response or redirect."""
+    if is_ajax_request():
         return jsonify({
-            'success': True,
-            'completed': completed,
-            'date': target_date,
-            'current_streak': current_streak,
-            'longest_streak': longest_streak,
-            'total_completions': len(completed_dates_set)
+            "success": True,
+            "message": message,
+            **extra,
         })
-        
-    return redirect(url_for('index'))
 
-@app.route('/habits/<int:habit_id>/delete', methods=['POST'])
-def delete_habit(habit_id):
+    return redirect(url_for("index"))
+
+
+def error_response(message, status_code=400):
+    """Return an error response appropriate to the request."""
+    if is_ajax_request():
+        return jsonify({
+            "success": False,
+            "message": message,
+        }), status_code
+
+    return message, status_code
+
+
+# ============================================================
+# DASHBOARD ROUTE
+# ============================================================
+
+@app.route("/")
+def index():
+    """Display the habit tracker dashboard."""
+    today = date.today()
+    recent_days = get_recent_days()
+
+    habit_rows = get_active_habits()
+    all_logs = get_all_habit_logs()
+
+    habits = [
+        build_habit_data(
+            habit,
+            all_logs.get(habit["id"], set()),
+            recent_days
+        )
+        for habit in habit_rows
+    ]
+
+    return render_template(
+        "index.html",
+        habits=habits,
+        today_formatted=today.strftime("%A, %B %d, %Y"),
+        today_str=format_date(today),
+        recent_days=recent_days,
+        stats=calculate_dashboard_stats(habits),
+    )
+
+
+# ============================================================
+# ADD HABIT
+# ============================================================
+
+@app.route("/habits/add", methods=["POST"])
+def add_habit():
+    """Create a new habit."""
+    data = request.get_json(silent=True) if request.is_json else request.form
+
+    if not isinstance(data, dict) and request.is_json:
+        return error_response("Invalid JSON body")
+
+    name = str(data.get("name") or "").strip()
+    category = str(data.get("category") or "General").strip()
+
+    if not name:
+        return error_response("Habit name is required")
+
+    if len(name) > 100:
+        return error_response("Habit name must be 100 characters or fewer")
+
+    if len(category) > 50:
+        return error_response("Category must be 50 characters or fewer")
+
+    try:
+        frequency = int(data.get("frequency", 7))
+    except (TypeError, ValueError, OverflowError):
+        return error_response("Frequency must be a valid integer")
+
+    frequency = max(1, min(7, frequency))
+
     db = get_db()
-    db.execute("DELETE FROM habit_logs WHERE habit_id = ?", (habit_id,))
-    db.execute("DELETE FROM habits WHERE id = ?", (habit_id,))
-    db.commit()
-    
-    if request.headers.get('X-Requested-With') == 'XMLHttpRequest' or request.is_json:
-        return jsonify({'success': True, 'message': 'Habit deleted'})
-    return redirect(url_for('index'))
 
-# Ensure DB is created when module is loaded/run
+    with db:
+        db.execute("""
+            INSERT INTO habits (name, category, frequency)
+            VALUES (?, ?, ?)
+        """, (name, category or "General", frequency))
+
+    return success_response("Habit created successfully")
+
+
+# ============================================================
+# TOGGLE HABIT COMPLETION
+# ============================================================
+
+@app.route("/habits/<int:habit_id>/toggle", methods=["POST"])
+def toggle_habit(habit_id):
+    """Mark a habit complete or incomplete for a given date."""
+    habit = get_habit(habit_id)
+
+    if habit is None:
+        return error_response("Habit not found", 404)
+
+    data = request.get_json(silent=True) if request.is_json else request.form
+
+    if not isinstance(data, dict) and request.is_json:
+        return error_response("Invalid JSON body")
+
+    target_date = data.get("date") or format_date(date.today())
+
+    if not validate_date(target_date):
+        return error_response("Invalid or future completion date")
+
+    db = get_db()
+
+    existing = db.execute("""
+        SELECT id
+        FROM habit_logs
+        WHERE habit_id = ? AND completed_date = ?
+    """, (habit_id, target_date)).fetchone()
+
+    with db:
+        if existing:
+            db.execute(
+                "DELETE FROM habit_logs WHERE id = ?",
+                (existing["id"],)
+            )
+            completed = False
+        else:
+            db.execute("""
+                INSERT INTO habit_logs (habit_id, completed_date)
+                VALUES (?, ?)
+            """, (habit_id, target_date))
+            completed = True
+
+    completed_dates = get_habit_dates(habit_id)
+
+    current_streak, longest_streak = calculate_streaks(
+        completed_dates
+    )
+
+    if is_ajax_request():
+        return jsonify({
+            "success": True,
+            "completed": completed,
+            "date": target_date,
+            "current_streak": current_streak,
+            "longest_streak": longest_streak,
+            "total_completions": len(completed_dates),
+        })
+
+    return redirect(url_for("index"))
+
+
+# ============================================================
+# DELETE HABIT
+# ============================================================
+
+@app.route("/habits/<int:habit_id>/delete", methods=["POST"])
+def delete_habit(habit_id):
+    """Delete a habit and its completion history."""
+    habit = get_habit(habit_id)
+
+    if habit is None:
+        return error_response("Habit not found", 404)
+
+    db = get_db()
+
+    # Related habit logs are deleted automatically by SQLite.
+    with db:
+        db.execute(
+            "DELETE FROM habits WHERE id = ?",
+            (habit_id,)
+        )
+
+    return success_response("Habit deleted")
+
+
+# ============================================================
+# APPLICATION STARTUP
+# ============================================================
+
 with app.app_context():
     init_db()
 
-if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+
+if __name__ == "__main__":
+    debug_mode = os.environ.get("FLASK_DEBUG") == "1"
+
+    app.run(
+        host="127.0.0.1",
+        port=5000,
+        debug=debug_mode,
+    )
